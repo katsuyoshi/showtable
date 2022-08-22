@@ -1,29 +1,54 @@
-#include <Arduino.h>
-// NeoPixelFunLoop
-// This example will move a trail of light around a series of pixels.  
-// A ring formation of pixels looks best.  
-// The trail will have a slowly fading tail.
-// 
-// This will demonstrate the use of the RotateRight method.
-//
 
+// NeoPixelFunFadeInOut
+// This example will randomly pick a color and fade all pixels to that color, then
+// it will fade them to black and restart over
+// 
+// This example demonstrates the use of a single animation channel to animate all
+// the pixels at once.
+//
+#include <M5Unified.h>
 #include <NeoPixelBus.h>
 #include <NeoPixelAnimator.h>
+#include "ServoEasing.hpp"
+
+
+#define PIXEL_PIN           2
+#define SERVO_PIN           5
+
+ServoEasing servo;
+
+bool running = false;
+bool ex_running = false;
+float deg = 83;
+float ex_deg = 0;
+
 
 
 const uint16_t PixelCount = 24; // make sure to set this to the number of pixels in your strip
-const uint16_t PixelPin = 2;  // make sure to set this to the correct pin, ignored for Esp8266
-const uint16_t AnimCount = 1; // we only need one
-const uint16_t TailLength = 6; // length of the tail, must be shorter than PixelCount
-const float MaxLightness = 0.4f; // max lightness at the head of the tail (0.5f is full bright)
+//const uint8_t PixelPin = 2;  // make sure to set this to the correct pin, ignored for Esp8266
+const uint8_t AnimationChannels = 1; // we only need one as all the pixels are animated at once
 
-NeoGamma<NeoGammaTableMethod> colorGamma; // for any fade animations, best to correct gamma
+NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> strip(PixelCount, PIXEL_PIN);
+// For Esp8266, the Pin is omitted and it uses GPIO3 due to DMA hardware use.  
+// There are other Esp8266 alternative methods that provide more pin options, but also have
+// other side effects.
+// for details see wiki linked here https://github.com/Makuna/NeoPixelBus/wiki/ESP8266-NeoMethods 
 
-NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> strip(PixelCount, PixelPin);
-// for esp8266 omit the pin
-//NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> strip(PixelCount);
+NeoPixelAnimator animations(AnimationChannels); // NeoPixel animation management object
 
-NeoPixelAnimator animations(AnimCount); // NeoPixel animation management object
+boolean fadeToColor = true;  // general purpose variable used to store effect state
+
+
+// what is stored for state is specific to the need, in this case, the colors.
+// basically what ever you need inside the animation update function
+struct MyAnimationState
+{
+    RgbColor StartingColor;
+    RgbColor EndingColor;
+};
+
+// one entry per pixel to match the animation timing manager
+MyAnimationState animationState[AnimationChannels];
 
 void SetRandomSeed()
 {
@@ -40,57 +65,129 @@ void SetRandomSeed()
         delay(1);
     }
 
-    // Serial.println(seed);
     randomSeed(seed);
 }
 
-void LoopAnimUpdate(const AnimationParam& param)
+// simple blend function
+void BlendAnimUpdate(const AnimationParam& param)
 {
-    // wait for this animation to complete,
-    // we are using it as a timer of sorts
-    if (param.state == AnimationState_Completed)
-    {
-        // done, time to restart this position tracking animation/timer
-        animations.RestartAnimation(param.index);
+    // this gets called for each animation on every time step
+    // progress will start at 0.0 and end at 1.0
+    // we use the blend function on the RgbColor to mix
+    // color based on the progress given to us in the animation
+    RgbColor updatedColor = RgbColor::LinearBlend(
+        animationState[param.index].StartingColor,
+        animationState[param.index].EndingColor,
+        param.progress);
 
-        // rotate the complete strip one pixel to the right on every update
-        strip.RotateRight(1);
+    // apply the color to the strip
+    for (uint16_t pixel = 0; pixel < PixelCount; pixel++)
+    {
+        if (running) {
+            strip.SetPixelColor(pixel, updatedColor);
+        } else {
+            strip.SetPixelColor(pixel, BLACK);
+        }
     }
 }
 
-void DrawTailPixels()
+void FadeInFadeOutRinseRepeat(float luminance)
 {
-    // using Hsl as it makes it easy to pick from similiar saturated colors
-    float hue = random(360) / 360.0f;
-    for (uint16_t index = 0; index < strip.PixelCount() && index <= TailLength; index++)
+    if (fadeToColor)
     {
-        float lightness = index * MaxLightness / TailLength;
-        RgbColor color = HslColor(hue, 1.0f, lightness);
+        // Fade upto a random color
+        // we use HslColor object as it allows us to easily pick a hue
+        // with the same saturation and luminance so the colors picked
+        // will have similiar overall brightness
+        RgbColor target = HslColor(random(360) / 360.0f, 1.0f, luminance);
+        uint16_t time = random(800, 2000);
 
-        strip.SetPixelColor(index, colorGamma.Correct(color));
+        animationState[0].StartingColor = strip.GetPixelColor(0);
+        animationState[0].EndingColor = target;
+
+        animations.StartAnimation(0, time, BlendAnimUpdate);
     }
+    else 
+    {
+        // fade to black
+        uint16_t time = random(600, 700);
+
+        animationState[0].StartingColor = strip.GetPixelColor(0);
+        animationState[0].EndingColor = RgbColor(0);
+
+        animations.StartAnimation(0, time, BlendAnimUpdate);
+    }
+
+    // toggle to the next effect state
+    fadeToColor = !fadeToColor;
+}
+
+void task_table(void* arg) {
+  int n = 0;
+  while(true) {
+    if (running) {
+      n = (n + 1) % 20;
+      //servo.easeTo(deg - (n == 0 ? 3 : 0));
+      servo.easeTo(deg);
+      delay(30);
+    }
+    servo.easeTo(90.0f);
+    delay(200);
+  }
 }
 
 void setup()
 {
+  M5.begin();
+  M5.Lcd.setTextFont(4);
+
+  servo.attach(SERVO_PIN, 0, DEFAULT_MICROSECONDS_FOR_0_DEGREE, DEFAULT_MICROSECONDS_FOR_180_DEGREE);
+  servo.setEasingType(EASE_LINEAR);
+  setSpeedForAllServos(60);
+
     strip.Begin();
     strip.Show();
 
     SetRandomSeed();
 
-    // Draw the tail that will be rotated through all the rest of the pixels
-    DrawTailPixels();
+  xTaskCreatePinnedToCore(task_table, "table", 4096, NULL, 1, NULL, 1);
 
-    // we use the index 0 animation to time how often we rotate all the pixels
-    animations.StartAnimation(0, 66, LoopAnimUpdate); 
 }
-
 
 void loop()
 {
-    // this is all that is needed to keep it running
-    // and avoiding using delay() is always a good thing for
-    // any timing related routines
-    animations.UpdateAnimations();
-    strip.Show();
+    if (animations.IsAnimating())
+    {
+        // the normal loop just needs these two to run the active animations
+        animations.UpdateAnimations();
+        strip.Show();
+    }
+    else
+    {
+        // no animation runnning, start some 
+        //
+        FadeInFadeOutRinseRepeat(0.2f); // 0.0 = black, 0.25 is normal, 0.5 is bright
+    }
+
+
+    M5.update();
+    if (M5.BtnA.wasPressed()) {
+      deg -= 1.0;
+      deg = max(deg, 0.0f);
+    }
+    if (M5.BtnB.wasPressed()) {
+      running = !running;
+    }
+    if (M5.BtnC.wasPressed()) {
+      deg += 1.0;
+      deg = min(deg, 180.0f);
+    }
+    if (deg != ex_deg || running != ex_running) {
+      ex_deg = deg;
+      ex_running = running;
+      M5.Lcd.clear(BLACK);
+      M5.Lcd.setCursor(0, 0);
+      M5.Lcd.printf("[%s] %.1f", running ? "R" : "S", deg);
+      //servo.easeTo(!running ? 90.0f : deg);
+    }
 }
