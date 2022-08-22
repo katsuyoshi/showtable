@@ -18,9 +18,10 @@
 ServoEasing servo;
 
 bool running = false;
-bool ex_running = false;
+bool use_led = true;
+int speed = 1;
+
 float deg = 83;
-float ex_deg = 0;
 
 
 
@@ -83,7 +84,7 @@ void BlendAnimUpdate(const AnimationParam& param)
     // apply the color to the strip
     for (uint16_t pixel = 0; pixel < PixelCount; pixel++)
     {
-        if (running) {
+        if (running && use_led) {
             strip.SetPixelColor(pixel, updatedColor);
         } else {
             strip.SetPixelColor(pixel, BLACK);
@@ -126,14 +127,21 @@ void task_table(void* arg) {
   int n = 0;
   while(true) {
     if (running) {
-      n = (n + 1) % 20;
-      //servo.easeTo(deg - (n == 0 ? 3 : 0));
       servo.easeTo(deg);
       delay(30);
     }
     servo.easeTo(90.0f);
-    delay(200);
+    delay((speed + 1) * 100);
   }
+}
+
+void displayInfo()
+{
+  M5.Lcd.clear(BLACK);
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.printf("%s\n", running ? "RUN" : "STOP");
+  M5.Lcd.printf("     LED: %s\n", use_led ? "ON" : "OFF");
+  M5.Lcd.printf("INTERVAL: %d\n", speed + 1);
 }
 
 void setup()
@@ -150,8 +158,9 @@ void setup()
 
     SetRandomSeed();
 
-  xTaskCreatePinnedToCore(task_table, "table", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(task_table, "table", 1024, NULL, 1, NULL, 1);
 
+  displayInfo();
 }
 
 void loop()
@@ -172,22 +181,17 @@ void loop()
 
     M5.update();
     if (M5.BtnA.wasPressed()) {
-      deg -= 1.0;
-      deg = max(deg, 0.0f);
-    }
-    if (M5.BtnB.wasPressed()) {
       running = !running;
     }
-    if (M5.BtnC.wasPressed()) {
-      deg += 1.0;
-      deg = min(deg, 180.0f);
+    if (M5.BtnB.wasPressed()) {
+      use_led = !use_led;
     }
-    if (deg != ex_deg || running != ex_running) {
-      ex_deg = deg;
-      ex_running = running;
-      M5.Lcd.clear(BLACK);
-      M5.Lcd.setCursor(0, 0);
-      M5.Lcd.printf("[%s] %.1f", running ? "R" : "S", deg);
-      //servo.easeTo(!running ? 90.0f : deg);
+    if (M5.BtnC.wasPressed()) {
+      speed = (speed + 1) % 30;
+    }
+
+    bool changed = M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed();
+    if (changed) {
+      displayInfo();
     }
 }
